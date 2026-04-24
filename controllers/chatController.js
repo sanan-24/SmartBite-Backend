@@ -1,111 +1,107 @@
-// // Simple rule-based chatbot controller with optional OpenAI proxy
-// const axios = require('axios');
-
-// exports.chat = async (req, res) => {
-//   try {
-//     const { message } = req.body;
-
-//     if (!message || !message.trim()) {
-//       return res.status(400).json({ success: false, reply: 'Please send a message.' });
-//     }
-
-//     // If OPENAI_API_KEY is provided, proxy to OpenAI Chat API (optional)
-//     if (process.env.OPENAI_API_KEY) {
-//       try {
-//         const response = await axios.post(
-//           'https://api.openai.com/v1/chat/completions',
-//           {
-//             model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-//             messages: [{ role: 'user', content: message }],
-//             max_tokens: 400,
-//             temperature: 0.7
-//           },
-//           {
-//             headers: {
-//               Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-//               'Content-Type': 'application/json'
-//             }
-//           }
-//         );
-
-//         const reply = response.data.choices?.[0]?.message?.content || 'Sorry, I could not generate a reply.';
-//         return res.json({ success: true, reply });
-//       } catch (err) {
-//         // fallback to local responder if OpenAI call fails
-//         console.error('OpenAI error:', err.message);
-//       }
-//     }
-
-//     // Simple fallback rule-based replies
-//     const text = message.toLowerCase();
-//     let reply = "I'm here to help! You can ask about the menu, orders, or your account.";
-
-//     if (/hi|hello|hey/.test(text)) {
-//       reply = 'Hello! How can I assist you today?';
-//     } else if (/menu|food|dishes|items/.test(text)) {
-//       reply = 'You can browse our menu at /menu. Want recommendations for popular dishes?';
-//     } else if (/order|status|track/.test(text)) {
-//       reply = 'To check order status go to Orders (protected). Provide your order id and I can try to help.';
-//     } else if (/review|rating|feedback/.test(text)) {
-//       reply = 'You can leave a review from your delivered order details. Which product would you like to review?';
-//     } else if (/help|support/.test(text)) {
-//       reply = 'For urgent issues contact support@example.com or check the app docs.';
-//     } else if (text.length < 20) {
-//       reply = "I didn't understand fully — could you provide a bit more detail?";
-//     } else {
-//       // gentle echo for longer messages
-//       reply = `Thanks for the message. You said: "${message.slice(0, 200)}". How would you like me to help?`;
-//     }
-
-//     res.json({ success: true, reply });
-//   } catch (error) {
-//     console.error(error);
-//     res.status(500).json({ success: false, reply: 'Server error' });
-//   }
-// };
-
-
-
-// controllers/chatbotController.js
 const axios = require('axios');
+const Food = require('../models/Food');
+require('../models/Category');
 
+/**
+ * @desc    Chat with AI Advisor using Groq (Llama 3)
+ * @route   POST /api/chat
+ * @access  Public
+ */
 exports.chat = async (req, res) => {
   try {
     const { message } = req.body;
+
     if (!message || !message.trim()) {
       return res.status(400).json({ success: false, reply: 'Please send a message.' });
     }
 
-    if (process.env.GROQ_API_KEY) {
-      try {
-        const response = await axios.post(
-          'https://api.groq.com/v1/llm/completions',
-          {
-            model: process.env.GROQ_MODEL || 'llama3-8b-8192',
-            input: `You are a helpful assistant for a food delivery app. A user asked: "${message}". Give advice about food choices, especially regarding health issues like stomach ache or headache, and recommend safe options. Keep reply short and friendly.`,
-            max_output_tokens: 200
-          },
-          {
-            headers: {
-              Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
-              'Content-Type': 'application/json'
-            }
-          }
-        );
-
-        const reply = response.data.output?.[0]?.content?.[0]?.text || "Sorry, I couldn't generate a reply.";
-        return res.json({ success: true, reply });
-      } catch (err) {
-        console.error('GROQ API error:', err.message);
-      }
+    // 1. Fetch available food items for context
+    let foods = [];
+    try {
+      // We populate category to give the AI context about food types
+      foods = await Food.find({ isAvailable: true })
+        .select('name description price rating category')
+        .populate('category', 'name');
+    } catch (dbErr) {
+      console.error('Database fetch error:', dbErr.message);
     }
 
-    // Rule-based fallback
-    res.json({ success: true, reply: "I'm here to help! Could you give me more detail?" });
+    // Prepare food context for the AI
+    const foodContext = foods.length > 0
+      ? foods.map(f => `- ${f.name} (${f.category?.name || 'Food'}): ${f.description}. Price: $${f.price}. Rating: ${f.rating}/5`).join('\n')
+      : "Currently no items are listed in the menu.";
+
+    // Identify trending items (Rating > 4.5)
+    const trendingItems = foods
+      .filter(f => f.rating >= 4.5)
+      .map(f => f.name)
+      .join(', ');
+
+    // 2. Groq API Details
+    const groqApiKey = process.env.GROQ_API_KEY;
+    if (!groqApiKey) {
+      return res.json({
+        success: false,
+        reply: "AI Advisor is currently offline (API key missing)."
+      });
+    }
+
+    // 3. Construct the System Prompt
+    const systemPrompt = `
+You are the SmartBite AI Advisor, an expert food consultant for the SmartBite food delivery app.
+Your goal is to help users find the best food based on their needs: trending items, health, diet, or specific health conditions.
+
+Here is the current SmartBite Menu Context:
+${foodContext}
+
+Trending items today (High rated): ${trendingItems || 'All our items are popular!'}
+
+Guidelines for your response:
+1. "Trending": Mention high-rated items like ${trendingItems || 'the items on our menu'}.
+2. "Health/Healthy": Recommend light meals, salads, or nutritious options from our menu.
+3. "Diet" (Weight loss, Keto, etc.): Suggest matching items from our menu.
+4. "Health Issues" (Diabetes, BP, etc.): Give general helpful advice and recommend the safest/lightest options from our menu.
+5. Be polite, professional, and use emojis (🍎, 🥗, 🍔, ✨).
+6. Keep responses short and sweet (2-4 sentences).
+7. ONLY suggest items from the menu context provided above.
+`;
+
+    // 4. Call Groq API (Llama 3.3 70B)
+    const response = await axios.post(
+      'https://api.groq.com/openai/v1/chat/completions',
+      {
+        model: "llama-3.3-70b-versatile",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: message }
+        ],
+        temperature: 0.7,
+        max_tokens: 300
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${groqApiKey}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 20000
+      }
+    );
+
+    const aiReply = response.data?.choices?.[0]?.message?.content || "I'm sorry, I couldn't process that. How else can I help you?";
+
+    return res.json({
+      success: true,
+      reply: aiReply.trim()
+    });
 
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, reply: 'Server error' });
+    console.error('Groq API Error:', error.response?.data || error.message);
+
+    // Fallback message if Groq fails or times out
+    return res.status(500).json({
+      success: false,
+      reply: "I'm having a bit of trouble thinking right now. Please try again in a moment! 🍎"
+    });
   }
 };
 
