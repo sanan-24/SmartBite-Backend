@@ -121,7 +121,7 @@ const seedData = async () => {
 
     await Food.insertMany(foodItems);
     console.log('✅ Success: All categories and food items seeded!');
-    
+
     process.exit();
   } catch (error) {
     console.error('❌ Error seeding data:', error.message);
