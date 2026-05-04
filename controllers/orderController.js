@@ -296,3 +296,113 @@ exports.updateDeliveryStatus = async (req, res) => {
     });
   }
 };
+
+// @desc    Get order reports (weekly, monthly, yearly)
+// @route   GET /api/v1/orders/reports
+// @access  Private/Admin
+exports.getOrderReports = asyncHandler(async (req, res, next) => {
+  const today = new Date();
+
+  // Weekly stats (last 7 days)
+  const lastWeek = new Date(today);
+  lastWeek.setDate(today.getDate() - 7);
+
+  // Monthly stats (last 30 days)
+  const lastMonth = new Date(today);
+  lastMonth.setDate(today.getDate() - 30);
+
+  // Yearly stats (last 365 days)
+  const lastYear = new Date(today);
+  lastYear.setDate(today.getDate() - 365);
+
+  const getStats = async (startDate) => {
+    const stats = await Order.aggregate([
+      {
+        $match: {
+          createdAt: { $gte: startDate },
+          orderStatus: { $ne: 'Cancelled' }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalOrders: { $sum: 1 },
+          totalRevenue: { $sum: '$totalPrice' }
+        }
+      }
+    ]);
+    return stats.length > 0 ? stats[0] : { totalOrders: 0, totalRevenue: 0 };
+  };
+
+  // Daily breakdown for the last 7 days
+  const dailyBreakdown = await Order.aggregate([
+    {
+      $match: {
+        createdAt: { $gte: lastWeek },
+        orderStatus: { $ne: 'Cancelled' }
+      }
+    },
+    {
+      $group: {
+        _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+        orders: { $sum: 1 },
+        revenue: { $sum: "$totalPrice" }
+      }
+    },
+    { $sort: { _id: 1 } }
+  ]);
+
+  const weeklyReport = await getStats(lastWeek);
+  const monthlyReport = await getStats(lastMonth);
+  const yearlyReport = await getStats(lastYear);
+
+  res.status(200).json({
+    success: true,
+    data: {
+      weekly: weeklyReport,
+      monthly: monthlyReport,
+      yearly: yearlyReport,
+      dailyBreakdown: dailyBreakdown
+    }
+  });
+});
+
+// @desc    Get detailed order statement for a range
+// @route   GET /api/v1/orders/statement
+// @access  Private/Admin
+exports.getOrderStatement = asyncHandler(async (req, res, next) => {
+  const { range } = req.query;
+  const today = new Date();
+  let startDate;
+
+  if (range === 'weekly') {
+    startDate = new Date(today);
+    startDate.setDate(today.getDate() - 7);
+  } else if (range === 'monthly') {
+    startDate = new Date(today);
+    startDate.setDate(today.getDate() - 30);
+  } else if (range === 'yearly') {
+    startDate = new Date(today);
+    startDate.setDate(today.getDate() - 365);
+  } else {
+    // Default to last 30 days if no range or invalid range
+    startDate = new Date(today);
+    startDate.setDate(today.getDate() - 30);
+  }
+
+  const orders = await Order.find({
+    createdAt: { $gte: startDate },
+    orderStatus: { $ne: 'Cancelled' }
+  })
+    .populate('user', 'name email phone')
+    .sort('-createdAt');
+
+  const totalRevenue = orders.reduce((acc, order) => acc + order.totalPrice, 0);
+
+  res.status(200).json({
+    success: true,
+    count: orders.length,
+    totalRevenue,
+    orders
+  });
+});
