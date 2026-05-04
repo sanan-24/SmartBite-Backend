@@ -19,7 +19,7 @@ app.use(express.urlencoded({ extended: true }));
 // Enable CORS
 app.use(cors({
   // origin: process.env.FRONTEND_URL || 'http://localhost:3000',
-  origin: 'https://smart-bite-frontend.vercel.app',
+  origin: 'https://smartbite-website.vercel.app',
   credentials: true
 }));
 
