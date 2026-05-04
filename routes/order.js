@@ -9,7 +9,9 @@ const {
   cancelOrder,
   assignRider,
   getRiderOrders,
-  updateDeliveryStatus
+  updateDeliveryStatus,
+  getOrderReports,
+  getOrderStatement
 } = require('../controllers/orderController');
 const { protect, authorize } = require('../middleware/auth');
 
@@ -18,6 +20,8 @@ router.route('/')
   .get(protect, authorize('admin'), getAllOrders);
 
 router.get('/myorders', protect, getMyOrders);
+router.get('/reports', protect, authorize('admin'), getOrderReports);
+router.get('/statement', protect, authorize('admin'), getOrderStatement);
 router.get('/rider/my-deliveries', protect, authorize('rider'), getRiderOrders);
 router.get('/:id', protect, getOrder);
 router.put('/:id/status', protect, authorize('admin'), updateOrderStatus);
